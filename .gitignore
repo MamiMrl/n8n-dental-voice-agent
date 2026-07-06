@@ -1,0 +1,21 @@
+# secrets & local real-value docs
+.env
+LOCAL-CONFIG.md
+*.local.json
+
+# teaching workspace (learning sessions, not project code)
+lessons/
+assets/
+learning-records/
+MISSION.md
+RESOURCES.md
+NOTES.md
+
+# archives & extracted variants
+*.zip
+_unzipped/
+
+# misc
+node_modules/
+.DS_Store
+notion-demo.md
