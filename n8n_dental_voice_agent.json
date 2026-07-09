@@ -32,7 +32,7 @@
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 2,
       "position": [
-        464,
+        704,
         -64
       ],
       "id": "b27cf2bc-76b0-4348-ae0b-c8fd90c6220e",
@@ -79,13 +79,13 @@
         "genericAuthType": "httpCustomAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"from_number\": \"+1XXXXXXXXXX\",\n  \"to_number\": \"{{ $json.output.properties.phone_number }}\",\n  \"retell_llm_dynamic_variables\": {\n    \"name\": \"{{ $json.output.properties.name }}\",\n    \"phone_number\": \"{{ $json.output.properties.phone_number }}\",\n    \"reason\": \"{{ $json.output.properties.reason }}\",\n    \"start_time\": \"{{ $json.output.properties.start_time }}\",\n    \"end_time\": \"{{ $json.output.properties.end_time  }}\"\n  },\n  \"override_agent_id\": \"YOUR_RETELL_AGENT_ID\"\n}",
+        "jsonBody": "={\n  \"from_number\": \"+1XXXXXXXXXX\",\n  \"to_number\": \"{{ $json.output.properties.phone_number }}\",\n  \"retell_llm_dynamic_variables\": {\n    \"name\": \"{{ $json.output.properties.name }}\",\n    \"phone_number\": \"{{ $json.output.properties.phone_number }}\",\n    \"reason\": \"{{ $json.output.properties.reason }}\",\n    \"start_time\": \"{{ $json.output.properties.start_time }}\",\n    \"end_time\": \"{{ $json.output.properties.end_time }}\",\n    \"email\": \"{{ $json.output.properties.email }}\",\n    \"event_id\": \"{{ $('Loop Over Items').first().json.id }}\",\n    \"calendar_id\": \"YOUR_CALENDAR_ID@group.calendar.google.com\",\n    \"current_date\": \"{{ $now.setZone('Europe/Berlin').toFormat('cccc, yyyy-MM-dd') }}\"\n  },\n  \"override_agent_id\": \"YOUR_RETELL_AGENT_ID\"\n}",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        848,
+        1024,
         -64
       ],
       "id": "bd5de479-e035-4653-a4aa-650a3dfade07",
@@ -123,6 +123,68 @@
           "name": "Google Calendar account"
         }
       }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "skip-handled-1",
+              "leftValue": "={{ $json.summary }}",
+              "rightValue": "[",
+              "operator": {
+                "type": "string",
+                "operation": "notStartsWith"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        320,
+        -64
+      ],
+      "id": "c1d2e3f4-a5b6-4c7d-8e9f-202020202001",
+      "name": "Skip Handled"
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        512,
+        -64
+      ],
+      "id": "d2e3f4a5-b6c7-4d8e-9f0a-202020202002",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "amount": 3,
+        "unit": "minutes"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1232,
+        -64
+      ],
+      "id": "e3f4a5b6-c7d8-4e9f-0a1b-202020202003",
+      "webhookId": "bbbb2222-0001-4bbb-8bbb-bbbbbbbb0001",
+      "name": "Wait Between Calls"
     }
   ],
   "pinData": {},
@@ -143,6 +205,51 @@
         [
           {
             "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Wait Between Calls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Between Calls": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Handled": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "AI Agent",
             "type": "main",
             "index": 0
           }
@@ -175,7 +282,7 @@
       "main": [
         [
           {
-            "node": "AI Agent",
+            "node": "Skip Handled",
             "type": "main",
             "index": 0
           }

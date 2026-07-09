@@ -1,0 +1,484 @@
+{
+  "name": "n8n_emma_tools",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "emma/slots",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "id": "1a7f0d2e-3b41-4c8a-9f0e-101010101001",
+      "webhookId": "aaaa1111-0001-4aaa-8aaa-aaaaaaaa0001",
+      "name": "Slots Webhook",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_EMMA_HEADER_AUTH_CREDENTIAL_ID",
+          "name": "Emma Webhook Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-01",
+              "name": "timezone",
+              "value": "Europe/Berlin",
+              "type": "string"
+            },
+            {
+              "id": "cfg-02",
+              "name": "slot_minutes",
+              "value": 30,
+              "type": "number"
+            },
+            {
+              "id": "cfg-03",
+              "name": "open_hour",
+              "value": 9,
+              "type": "number"
+            },
+            {
+              "id": "cfg-04",
+              "name": "close_hour",
+              "value": 17,
+              "type": "number"
+            },
+            {
+              "id": "cfg-05",
+              "name": "work_days",
+              "value": "1,2,3,4,5",
+              "type": "string"
+            },
+            {
+              "id": "cfg-06",
+              "name": "horizon_days",
+              "value": 56,
+              "type": "number"
+            },
+            {
+              "id": "cfg-07",
+              "name": "min_notice_hours",
+              "value": 4,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0],
+      "id": "2b8e1f3a-4c52-4d9b-a01f-101010101002",
+      "name": "Clinic Config"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID@group.calendar.google.com",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "timeMin": "={{ $now }}",
+        "timeMax": "={{ $now.plus($('Clinic Config').first().json.horizon_days, 'days') }}",
+        "options": {
+          "singleEvents": true
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [440, 0],
+      "id": "3c9f2a4b-5d63-4eac-b120-101010101003",
+      "name": "Get Booked Events",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "YOUR_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ADR 0007/0008/0010/0019 — compute free slots, earliest-first, 3 max, dual-form dates\nconst cfg = $('Clinic Config').first().json;\nconst req = $('Slots Webhook').first().json.body || {};\nconst args = req.args || {};\nconst tz = cfg.timezone;\n\n// 1. Busy intervals from booked events ([CANCELLED] events do not block — ADR 0015)\nconst busy = [];\nfor (const item of $input.all()) {\n  const e = item.json;\n  if (!e || !e.start) continue;\n  if ((e.summary || '').startsWith('[CANCELLED]')) continue;\n  busy.push([\n    DateTime.fromISO(e.start.dateTime || e.start.date).toMillis(),\n    DateTime.fromISO(e.end.dateTime || e.end.date).toMillis(),\n  ]);\n}\n\n// 2. Search window\nconst now = DateTime.now().setZone(tz);\nconst earliest = now.plus({ hours: Number(cfg.min_notice_hours) });\nconst horizon = now.plus({ days: Number(cfg.horizon_days) });\nconst workDays = String(cfg.work_days).split(',').map(Number); // Luxon: 1=Mon … 7=Sun\n\n// 3. Structured hints from Emma (ADR 0019) — n8n does the date math, never the LLM\nconst WEEKDAYS = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 7 };\nlet targetDay = null;\nconst wanted = WEEKDAYS[String(args.weekday || '').toLowerCase()];\nif (wanted) {\n  let d = now.startOf('day');\n  while (d.weekday !== wanted) d = d.plus({ days: 1 });\n  targetDay = d.plus({ weeks: Number(args.week_offset || 0) });\n}\nconst dayPart = String(args.day_part || '').toLowerCase(); // '', 'morning', 'afternoon'\n\n// 4. Walk the grid, earliest-first, stop at 3 offers\nfunction collectDay(day, out) {\n  if (!workDays.includes(day.weekday)) return;\n  let t = day.set({ hour: Number(cfg.open_hour), minute: 0, second: 0, millisecond: 0 });\n  const close = day.set({ hour: Number(cfg.close_hour), minute: 0, second: 0, millisecond: 0 });\n  while (t.plus({ minutes: Number(cfg.slot_minutes) }) <= close && out.length < 3) {\n    const s = t.toMillis();\n    const e = t.plus({ minutes: Number(cfg.slot_minutes) }).toMillis();\n    const tooEarly = t < earliest;\n    const wrongPart =\n      (dayPart === 'morning' && t.hour >= 12) ||\n      (dayPart === 'afternoon' && t.hour < 12);\n    const taken = busy.some(([bs, be]) => s < be && e > bs);\n    if (!tooEarly && !wrongPart && !taken) {\n      out.push({\n        iso: t.toISO({ suppressMilliseconds: true }),\n        spoken: t.toFormat(\"cccc, LLLL d 'at' h:mm a\"),\n      });\n    }\n    t = t.plus({ minutes: Number(cfg.slot_minutes) });\n  }\n}\n\nconst slots = [];\nlet requestedDayFull = false;\nif (targetDay) {\n  collectDay(targetDay, slots);\n  requestedDayFull = slots.length === 0;\n  let d = targetDay.plus({ days: 1 });\n  while (slots.length < 3 && d <= horizon) {\n    collectDay(d, slots);\n    d = d.plus({ days: 1 });\n  }\n} else {\n  // week_offset without a weekday: 'in two weeks' -> start searching that far out\n  let d = now.plus({ weeks: Number(args.week_offset || 0) }).startOf('day');\n  if (d < earliest.startOf('day')) d = earliest.startOf('day');\n  while (slots.length < 3 && d <= horizon) {\n    collectDay(d, slots);\n    d = d.plus({ days: 1 });\n  }\n}\n\n// 5. Answer for Emma\nreturn [{\n  json: {\n    slots,\n    offer_only_first: true,\n    requested_day_full: requestedDayFull,\n    no_availability: slots.length === 0,\n    instruction:\n      'Offer ONLY the first slot, reading its spoken field word for word. ' +\n      'Only if the patient declines, offer the next slot. Never list several slots at once. ' +\n      'When booking, send back the iso value of the accepted slot unchanged.',\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0],
+      "id": "4d0a3b5c-6e74-4fbd-c231-101010101004",
+      "name": "Compute Free Slots"
+    },
+    {
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [880, 0],
+      "id": "5e1b4c6d-7f85-40ce-d342-101010101005",
+      "name": "Respond Slots"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "emma/reschedule",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 320],
+      "id": "6f2c5d7e-8a96-41df-e453-101010101006",
+      "webhookId": "aaaa1111-0002-4aaa-8aaa-aaaaaaaa0002",
+      "name": "Reschedule Webhook",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_EMMA_HEADER_AUTH_CREDENTIAL_ID",
+          "name": "Emma Webhook Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID@group.calendar.google.com",
+          "mode": "id"
+        },
+        "eventId": "={{ $json.body.args.event_id }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [220, 320],
+      "id": "7a3d6e8f-9ba7-42ea-f564-101010101007",
+      "name": "Get Current Event",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "YOUR_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID@group.calendar.google.com",
+          "mode": "id"
+        },
+        "eventId": "={{ $('Reschedule Webhook').first().json.body.args.event_id }}",
+        "updateFields": {
+          "start": "={{ $('Reschedule Webhook').first().json.body.args.slot_iso }}",
+          "end": "={{ DateTime.fromISO($('Reschedule Webhook').first().json.body.args.slot_iso).plus({ minutes: 30 }).toISO() }}",
+          "summary": "={{ '[CONFIRMED] ' + ($json.summary || '').replace(/^\\[[A-Z_ ]+\\]\\s*/, '') }}",
+          "description": "={{ $('Reschedule Webhook').first().json.body.args.reason ? (($json.description || '') + '\\nNote from call: ' + $('Reschedule Webhook').first().json.body.args.reason) : ($json.description || '') }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [440, 320],
+      "id": "8b4e7f9a-acb8-43fb-a675-101010101008",
+      "name": "Move Appointment",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "YOUR_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"success\": true,\n  \"message\": \"The appointment was moved to the new time. Confirm the new day and time to the patient in one short sentence.\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [660, 320],
+      "id": "9c5f8a0b-bdc9-440c-b786-101010101009",
+      "name": "Respond Reschedule"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "emma/cancel",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 640],
+      "id": "0d6a9b1c-cedb-451d-c897-10101010100a",
+      "webhookId": "aaaa1111-0003-4aaa-8aaa-aaaaaaaa0003",
+      "name": "Cancel Webhook",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_EMMA_HEADER_AUTH_CREDENTIAL_ID",
+          "name": "Emma Webhook Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID@group.calendar.google.com",
+          "mode": "id"
+        },
+        "eventId": "={{ $json.body.args.event_id }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [220, 640],
+      "id": "1e7b0c2d-dfec-462e-d9a8-10101010100b",
+      "name": "Get Event To Cancel",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "YOUR_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID@group.calendar.google.com",
+          "mode": "id"
+        },
+        "eventId": "={{ $('Cancel Webhook').first().json.body.args.event_id }}",
+        "updateFields": {
+          "summary": "={{ '[CANCELLED] ' + ($json.summary || '').replace(/^\\[[A-Z_ ]+\\]\\s*/, '') }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [440, 640],
+      "id": "2f8c1d3e-e0fd-473f-eab9-10101010100c",
+      "name": "Mark Cancelled",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "YOUR_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"success\": true,\n  \"message\": \"The appointment is cancelled. Tell the patient the cancellation is done and say a friendly goodbye.\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [660, 640],
+      "id": "3a9d2e4f-f10e-4840-fbca-10101010100d",
+      "name": "Respond Cancel"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "emma/create",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 960],
+      "id": "4b0e3f5a-021f-4951-acdb-10101010100e",
+      "webhookId": "aaaa1111-0004-4aaa-8aaa-aaaaaaaa0004",
+      "name": "Create Webhook",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_EMMA_HEADER_AUTH_CREDENTIAL_ID",
+          "name": "Emma Webhook Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID@group.calendar.google.com",
+          "mode": "id"
+        },
+        "start": "={{ $json.body.args.slot_iso }}",
+        "end": "={{ DateTime.fromISO($json.body.args.slot_iso).plus({ minutes: 30 }).toISO() }}",
+        "additionalFields": {
+          "summary": "={{ ($json.body.call?.retell_llm_dynamic_variables?.name || 'Patient') + ' - ' + ($json.body.args.reason || 'Appointment') }}",
+          "description": "={{ 'Phone: ' + ($json.body.call?.retell_llm_dynamic_variables?.phone_number || '') + '\\nEmail: ' + ($json.body.call?.retell_llm_dynamic_variables?.email || '') + '\\nBooked by Emma during a reminder call.' }}"
+        },
+        "useDefaultReminders": true
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [220, 960],
+      "id": "5c1f4a6b-1320-4a62-bdec-10101010100f",
+      "name": "Create Appointment",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "YOUR_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"success\": true,\n  \"message\": \"The new appointment is booked. Confirm the day and time to the patient in one short sentence.\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [440, 960],
+      "id": "6d2a5b7c-2431-4b73-cefd-101010101010",
+      "name": "Respond Create"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "emma/outcome",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 1280],
+      "id": "7e3b6c8d-3542-4c84-d00e-101010101011",
+      "webhookId": "aaaa1111-0005-4aaa-8aaa-aaaaaaaa0005",
+      "name": "Outcome Webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ADR 0018 — turn Retell's post-call analysis into a status prefix.\n// Cancelled/rescheduled were already stamped mid-call, so they pass through as no-ops.\nconst body = $input.first().json.body || {};\nif (body.event !== 'call_analyzed') return [];\n\nconst call = body.call || {};\nconst dyn = call.retell_llm_dynamic_variables || {};\nconst analysis = (call.call_analysis || {}).custom_analysis_data || {};\nconst status = String(analysis.appointment_status || '').toLowerCase();\n\nlet prefix = null;\nif (status.includes('confirm')) prefix = '[CONFIRMED]';\nelse if (status.includes('no_answer') || status.includes('no answer') || status.includes('voicemail')) prefix = '[NO ANSWER]';\n\nif (!prefix || !dyn.event_id) return [];\nreturn [{ json: { event_id: dyn.event_id, prefix } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 1280],
+      "id": "8f4c7d9e-4653-4d95-e11f-101010101012",
+      "name": "Pick Status Prefix"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID@group.calendar.google.com",
+          "mode": "id"
+        },
+        "eventId": "={{ $json.event_id }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [440, 1280],
+      "id": "9a5d8e0f-5764-4ea6-f220-101010101013",
+      "name": "Get Event For Status",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "YOUR_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID@group.calendar.google.com",
+          "mode": "id"
+        },
+        "eventId": "={{ $('Pick Status Prefix').first().json.event_id }}",
+        "updateFields": {
+          "summary": "={{ $('Pick Status Prefix').first().json.prefix + ' ' + ($json.summary || '').replace(/^\\[[A-Z_ ]+\\]\\s*/, '') }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [660, 1280],
+      "id": "0b6e9f1a-6875-4fb7-a331-101010101014",
+      "name": "Stamp Outcome",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "YOUR_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "Google Calendar account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Slots Webhook": {
+      "main": [[{ "node": "Clinic Config", "type": "main", "index": 0 }]]
+    },
+    "Clinic Config": {
+      "main": [[{ "node": "Get Booked Events", "type": "main", "index": 0 }]]
+    },
+    "Get Booked Events": {
+      "main": [[{ "node": "Compute Free Slots", "type": "main", "index": 0 }]]
+    },
+    "Compute Free Slots": {
+      "main": [[{ "node": "Respond Slots", "type": "main", "index": 0 }]]
+    },
+    "Reschedule Webhook": {
+      "main": [[{ "node": "Get Current Event", "type": "main", "index": 0 }]]
+    },
+    "Get Current Event": {
+      "main": [[{ "node": "Move Appointment", "type": "main", "index": 0 }]]
+    },
+    "Move Appointment": {
+      "main": [[{ "node": "Respond Reschedule", "type": "main", "index": 0 }]]
+    },
+    "Cancel Webhook": {
+      "main": [[{ "node": "Get Event To Cancel", "type": "main", "index": 0 }]]
+    },
+    "Get Event To Cancel": {
+      "main": [[{ "node": "Mark Cancelled", "type": "main", "index": 0 }]]
+    },
+    "Mark Cancelled": {
+      "main": [[{ "node": "Respond Cancel", "type": "main", "index": 0 }]]
+    },
+    "Create Webhook": {
+      "main": [[{ "node": "Create Appointment", "type": "main", "index": 0 }]]
+    },
+    "Create Appointment": {
+      "main": [[{ "node": "Respond Create", "type": "main", "index": 0 }]]
+    },
+    "Outcome Webhook": {
+      "main": [[{ "node": "Pick Status Prefix", "type": "main", "index": 0 }]]
+    },
+    "Pick Status Prefix": {
+      "main": [[{ "node": "Get Event For Status", "type": "main", "index": 0 }]]
+    },
+    "Get Event For Status": {
+      "main": [[{ "node": "Stamp Outcome", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
