@@ -27,3 +27,5 @@ workflow node name should use these terms consistently.
 | **Dual-form date** | Every slot on the wire carries `iso` (machines) + `spoken` (read verbatim by Emma); Emma never computes dates (ADR 0019). |
 | **Structured hint** | How Emma forwards patient-named days: `{weekday, week_offset}` etc., resolved to dates in n8n (ADR 0019). |
 | **Fallback script** | On tool failure Emma degrades to v1 behavior: "the clinic will call you back" (ADR 0016). |
+| **Repeated Calls bypass** | iOS Focus/DND allowance: a second call from the same number within ~3 minutes rings through even while blocked. Motivates firing the no-answer retry immediately, not hours later (ADR 0020). |
+| **`[RETRY]` prefix** | Status prefix stamped after a first true no-answer; a second no-answer replaces it with the final `[NO ANSWER]` (ADR 0020). Excludes voicemail, which finalizes immediately with no retry. |

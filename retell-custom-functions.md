@@ -118,14 +118,17 @@ n8n production webhook URLs use the `/webhook/` prefix (the workflow must be
 
 ---
 
-## Post-call webhook (lane 5, ADR 0018)
+## Post-call webhook (lane 5, ADR 0018/0020)
 
 Retell dashboard → agent → **Webhook settings**:
 
 - **Webhook URL:** `https://YOUR_TUNNEL_DOMAIN/webhook/emma/outcome`
 - n8n reacts only to the `call_analyzed` event; others are ignored.
 - Post-call analysis must keep the custom field **`appointment_status`** with
-  values: `confirmed`, `rescheduled`, `cancelled`, `no_answer`, `wrong_number`.
+  values: `confirmed`, `rescheduled`, `cancelled`, `no_answer`, `voicemail`,
+  `wrong_number`. **`voicemail` must be distinct from `no_answer`** — a true
+  no-answer gets one immediate retry (ADR 0020), voicemail does not, since
+  Emma already left the appointment message.
 
 Note: this endpoint has no header auth (Retell's call webhooks don't send
 custom headers) — it relies on the unguessable path plus the fact that it
