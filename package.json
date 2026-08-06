@@ -1,0 +1,12 @@
+{
+  "name": "n8n-dental-agent",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Tests for the pure JS logic embedded in the Emma Tools n8n workflow's Code nodes",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "devDependencies": {
+    "luxon": "^3.5.0"
+  }
+}
